@@ -10,11 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@turf/helpers": "^7.4.0",
     "@turf/nearest-point-on-line": "^7.4.0",
     "maplibre-gl": "^6.3.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

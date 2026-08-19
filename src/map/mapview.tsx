@@ -2,13 +2,27 @@ import { useEffect, useRef, useState } from 'react';
 import { Map, NavigationControl, Marker } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { osmStyle } from './mapstyle';
+import { search } from '../api/geocode';
 
 const FALLBACK: [number, number] = [0, 0];
+
+// holds off on returning the new value until `delay` ms pass with no further changes
+function useDebounce<T>(value: T, delay: number): T {
+    const [debouncedValue, setDebouncedValue] = useState(value);
+
+    useEffect(() => {
+        const handler = setTimeout(() => setDebouncedValue(value), delay);
+        return () => clearTimeout(handler);
+    }, [value, delay]);
+
+    return debouncedValue;
+}
 
 // location retrival code
 export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
     const [Me, setMe] = useState<[number, number] | null>(null);
-
+    const [from, setFrom] = useState("");
+    const [to, setTo] = useState("");
     useEffect(() => {
         const watchId = navigator.geolocation.watchPosition(
             (pos) => {
@@ -85,5 +99,43 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
             map.current.jumpTo({ center: Me });
         }
     }, [Me]);
-    return <div ref={container} style={{ position: 'absolute', inset: 0 }} />;
+
+
+    const debouncedFrom = useDebounce(from, 1000);
+    useEffect(() => {
+        if (!debouncedFrom) return;
+
+        const ctrl = new AbortController();
+        search(debouncedFrom, undefined, ctrl.signal)
+            .then((results) => console.log('from', debouncedFrom, results))
+            .catch((err) => {
+                // the cleanup below aborts a search the next keystroke superseded
+                if (err.name !== 'AbortError') console.warn('geocode from', err);
+            });
+
+        return () => ctrl.abort();
+    }, [debouncedFrom]);
+
+    const debouncedTo = useDebounce(to, 1000);
+    useEffect(() => {
+        if (!debouncedTo) return;
+
+        const ctrl = new AbortController();
+        search(debouncedTo, undefined, ctrl.signal)
+            .then((results) => console.log('to', debouncedTo, results))
+            .catch((err) => {
+                if (err.name !== 'AbortError') console.warn('geocode to', err);
+            });
+
+        return () => ctrl.abort();
+    }, [debouncedTo]);
+
+
+    return <>
+
+        <input type="text" value={from} placeholder='from' onChange={(e) => setFrom(e.target.value)} />
+        <input type="text" value={to} placeholder='to' onChange={(e) => setTo(e.target.value)} />
+        <div ref={container} className="absolute inset-0" />
+
+    </>
 }
