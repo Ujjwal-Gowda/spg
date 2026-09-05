@@ -1,12 +1,23 @@
-// to get the details of a place with the help of the name or it scordinates
-export async function search(q: string, cords?: [number, number], signal?: AbortSignal) {
+export type Place = {
+    name: string
+    cords: [number, number] // [lng, lat]
+}
+
+type PhotonFeature = {
+    properties: Record<string, string | undefined>
+    geometry: { coordinates: [number, number] }
+}
+
+// to get the details of a place with the help of the name or its coordinates
+export async function search(q: string, cords?: [number, number], signal?: AbortSignal): Promise<Place[]> {
     const url = new URL(`https://photon.komoot.io/api/`)
     url.searchParams.set("q", q)
     url.searchParams.set("limit", "5")
 
+    // bias the results towards the map's current position
     if (cords) {
-        url.searchParams.set("lat", String(cords[0]))
-        url.searchParams.set("log", String(cords[1]))
+        url.searchParams.set("lon", String(cords[0]))
+        url.searchParams.set("lat", String(cords[1]))
     }
     // caller's signal cancels a superseded search; the timeout still caps a slow one
     const timeout = AbortSignal.timeout(8000)
@@ -19,9 +30,8 @@ export async function search(q: string, cords?: [number, number], signal?: Abort
     }
     const data = await res.json();
 
-    console.log(data)
-    return data.features.map((f: any) => ({
-        name: [f.properties.name, f.properties.city, f.properties.state]
+    return (data.features as PhotonFeature[]).map((f) => ({
+        name: [f.properties.name, f.properties.city, f.properties.state, f.properties.country]
             .filter(Boolean).join(', '),
         cords: f.geometry.coordinates,
     }))

@@ -1,33 +1,56 @@
 import { useEffect, useRef, useState } from 'react';
-import { Map, NavigationControl, Marker } from 'maplibre-gl';
+import { Map, NavigationControl, Marker, LngLatBounds } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { osmStyle } from './mapstyle';
-import { search } from '../api/geocode';
+import { SearchBox } from '../ui/searchbox';
+import type { Place } from '../api/geocode';
 
 const FALLBACK: [number, number] = [0, 0];
 
-// holds off on returning the new value until `delay` ms pass with no further changes
-function useDebounce<T>(value: T, delay: number): T {
-    const [debouncedValue, setDebouncedValue] = useState(value);
-
-    useEffect(() => {
-        const handler = setTimeout(() => setDebouncedValue(value), delay);
-        return () => clearTimeout(handler);
-    }, [value, delay]);
-
-    return debouncedValue;
-}
-
-// location retrival code
 export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
-    const [Me, setMe] = useState<[number, number] | null>(null);
-    const [from, setFrom] = useState("");
-    const [to, setTo] = useState("");
+    const [me, setMe] = useState<[number, number] | null>(null);
+    const [from, setFrom] = useState<Place | null>(null);
+    const [to, setTo] = useState<Place | null>(null);
+
+    const container = useRef<HTMLDivElement>(null);
+    const map = useRef<Map | null>(null);
+    const meMarker = useRef<Marker | null>(null);
+    const fromMarker = useRef<Marker | null>(null);
+    const toMarker = useRef<Marker | null>(null);
+    const centered = useRef(false);
+    // once a place is picked the map stops chasing the gps position
+    const follow = useRef(true);
+
+    // map on the first render
+    useEffect(() => {
+        if (map.current || !container.current) return;
+
+        map.current = new Map({
+            container: container.current,
+            style: osmStyle,
+            center: FALLBACK,   // [lng, lat]
+            zoom: 2,
+        });
+
+        map.current.addControl(new NavigationControl(), 'top-right');
+        map.current.on('load', () => onReady?.(map.current!));
+        map.current.on('error', (e) => console.error('map', e.error));
+
+        return () => {
+            map.current?.remove();
+            map.current = null;
+            meMarker.current = null;
+            fromMarker.current = null;
+            toMarker.current = null;
+            centered.current = false;
+        };
+    }, []);
+
+    // location retrieval
     useEffect(() => {
         const watchId = navigator.geolocation.watchPosition(
             (pos) => {
                 const { latitude, longitude } = pos.coords;
-                console.log(pos.coords)
                 setMe((prev) =>
                     prev && prev[0] === longitude && prev[1] === latitude
                         ? prev
@@ -47,95 +70,84 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
         };
     }, []);
 
-    const markerRef = useRef<Marker | null>(null);
-    const container = useRef<HTMLDivElement>(null);
-    const map = useRef<Map | null>(null);
-    const centered = useRef(false);
-
-
-    // map on the first render
-    useEffect(() => {
-        if (map.current || !container.current) return;
-
-        map.current = new Map({
-            container: container.current,
-            style: osmStyle,
-            center: FALLBACK,   // [lng, lat]  dont mess this up again
-            zoom: 12,
-        });
-
-        map.current.addControl(new NavigationControl(), 'top-right');
-        map.current.on('load', () => onReady?.(map.current!));
-        map.current.on('error', (e) => console.error('map', e.error));
-
-        return () => {
-            map.current?.remove();
-            map.current = null;
-            markerRef.current = null;
-            centered.current = false;
-        };
-
-    }, []);
-
     // marker code
     useEffect(() => {
-        if (!map.current || !Me) return;
+        if (!map.current || !me) return;
 
-        if (!markerRef.current) {
-            markerRef.current = new Marker({
-                color: '#007AFF',
-            })
-                .setLngLat(Me)
+        if (!meMarker.current) {
+            meMarker.current = new Marker({ color: '#007AFF' })
+                .setLngLat(me)
                 .addTo(map.current);
         } else {
-            markerRef.current.setLngLat(Me);
+            meMarker.current.setLngLat(me);
         }
+
+        if (!follow.current) return;
 
         // snap on the first relocation and then smooth follow to save on tiles
         if (centered.current) {
-            map.current.easeTo({ center: Me });
+            map.current.easeTo({ center: me });
         } else {
             centered.current = true;
-            map.current.jumpTo({ center: Me });
+            map.current.jumpTo({ center: me, zoom: 13 });
         }
-    }, [Me]);
+    }, [me]);
 
-
-    const debouncedFrom = useDebounce(from, 1000);
+    // the picked from / to places
     useEffect(() => {
-        if (!debouncedFrom) return;
+        const m = map.current;
+        if (!m) return;
 
-        const ctrl = new AbortController();
-        search(debouncedFrom, undefined, ctrl.signal)
-            .then((results) => console.log('from', debouncedFrom, results))
-            .catch((err) => {
-                // the cleanup below aborts a search the next keystroke superseded
-                if (err.name !== 'AbortError') console.warn('geocode from', err);
-            });
+        for (const [place, ref, color] of [
+            [from, fromMarker, '#16a34a'],
+            [to, toMarker, '#dc2626'],
+        ] as const) {
+            if (!place) {
+                ref.current?.remove();
+                ref.current = null;
+            } else if (ref.current) {
+                ref.current.setLngLat(place.cords);
+            } else {
+                ref.current = new Marker({ color }).setLngLat(place.cords).addTo(m);
+            }
+        }
 
-        return () => ctrl.abort();
-    }, [debouncedFrom]);
+        if (from && to) {
+            m.fitBounds(new LngLatBounds(from.cords, to.cords), { padding: 120, maxZoom: 15 });
+        } else if (from || to) {
+            m.flyTo({ center: (from ?? to)!.cords, zoom: 14 });
+        }
+    }, [from, to]);
 
-    const debouncedTo = useDebounce(to, 1000);
-    useEffect(() => {
-        if (!debouncedTo) return;
+    function pin(setter: (p: Place | null) => void) {
+        return (place: Place) => {
+            follow.current = false;
+            setter(place);
+        };
+    }
 
-        const ctrl = new AbortController();
-        search(debouncedTo, undefined, ctrl.signal)
-            .then((results) => console.log('to', debouncedTo, results))
-            .catch((err) => {
-                if (err.name !== 'AbortError') console.warn('geocode to', err);
-            });
+    return (
+        <>
+            {/* maplibre-gl.css forces position:relative on this div (it wins over
+                tailwind's layered utilities), so size it instead of absolute-inset it */}
+            <div ref={container} className="h-full w-full" />
 
-        return () => ctrl.abort();
-    }, [debouncedTo]);
-
-
-    return <>
-
-        <input type="text" value={from} placeholder='from' onChange={(e) => setFrom(e.target.value)} />
-        <input type="text" value={to} placeholder='to' onChange={(e) => setTo(e.target.value)} />
-        <div ref={container} className="absolute inset-0" />
-
-    </>
+            <div className="pointer-events-none absolute inset-x-0 top-4 z-10 flex justify-center px-4">
+                <div className="pointer-events-auto flex w-full max-w-md flex-col gap-2 rounded-xl border border-neutral-200 bg-white/95 p-3 shadow-xl backdrop-blur">
+                    <SearchBox
+                        placeholder="From"
+                        near={me}
+                        onSelect={pin(setFrom)}
+                        onClear={() => setFrom(null)}
+                    />
+                    <SearchBox
+                        placeholder="To"
+                        near={me}
+                        onSelect={pin(setTo)}
+                        onClear={() => setTo(null)}
+                    />
+                </div>
+            </div>
+        </>
+    );
 }
