@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Map, NavigationControl, Marker, LngLatBounds } from 'maplibre-gl';
+import { Map, GeoJSONSource, NavigationControl, Marker, LngLatBounds, setWorkerUrl } from 'maplibre-gl';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { osmStyle } from './mapstyle';
 import { SearchBox } from '../ui/searchbox';
 import type { Place } from '../api/geocode';
+import { Routing } from '../api/route';
+
+setWorkerUrl(maplibreWorkerUrl);
 
 const FALLBACK: [number, number] = [0, 0];
 
@@ -11,6 +15,7 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
     const [me, setMe] = useState<[number, number] | null>(null);
     const [from, setFrom] = useState<Place | null>(null);
     const [to, setTo] = useState<Place | null>(null);
+    const [styleReady, setStyleReady] = useState(false);
 
     const container = useRef<HTMLDivElement>(null);
     const map = useRef<Map | null>(null);
@@ -18,10 +23,9 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
     const fromMarker = useRef<Marker | null>(null);
     const toMarker = useRef<Marker | null>(null);
     const centered = useRef(false);
-    // once a place is picked the map stops chasing the gps position
     const follow = useRef(true);
+    const swapping = useRef(false);
 
-    // map on the first render
     useEffect(() => {
         if (map.current || !container.current) return;
 
@@ -30,10 +34,14 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
             style: osmStyle,
             center: FALLBACK,   // [lng, lat]
             zoom: 2,
+            renderWorldCopies: false
         });
 
         map.current.addControl(new NavigationControl(), 'top-right');
-        map.current.on('load', () => onReady?.(map.current!));
+        map.current.on('load', () => {
+            setStyleReady(true);
+            onReady?.(map.current!);
+        });
         map.current.on('error', (e) => console.error('map', e.error));
 
         return () => {
@@ -50,7 +58,21 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
     useEffect(() => {
         const watchId = navigator.geolocation.watchPosition(
             (pos) => {
-                const { latitude, longitude } = pos.coords;
+
+                const { latitude, longitude, accuracy } = pos.coords;
+
+
+                console.log({
+                    latitude,
+                    longitude,
+                    accuracy,
+                    accuracyKm: accuracy / 1000,
+                });
+                if (accuracy > 1000) {
+                    console.warn(`Ignoring inaccurate location: ${accuracy}m`);
+                    return;
+                }
+
                 setMe((prev) =>
                     prev && prev[0] === longitude && prev[1] === latitude
                         ? prev
@@ -60,8 +82,8 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
             (err) => console.warn('geo', err.message),
             {
                 enableHighAccuracy: true,
-                maximumAge: 5000,
-                timeout: 10000,
+                maximumAge: 0,
+                timeout: 30000,
             }
         );
 
@@ -111,11 +133,21 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
                 ref.current = new Marker({ color }).setLngLat(place.cords).addTo(m);
             }
         }
+        if (swapping.current) {
+            swapping.current = false;
+            return;
+        }
 
         if (from && to) {
-            m.fitBounds(new LngLatBounds(from.cords, to.cords), { padding: 120, maxZoom: 15 });
+            m.fitBounds(
+                new LngLatBounds().extend(from.cords).extend(to.cords),
+                { padding: 120 }
+            );
         } else if (from || to) {
-            m.flyTo({ center: (from ?? to)!.cords, zoom: 14 });
+            m.flyTo({
+                center: (from ?? to)!.cords,
+                zoom: 14
+            });
         }
     }, [from, to]);
 
@@ -125,6 +157,112 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
             setter(place);
         };
     }
+    const handleSwap = () => {
+        // alert("location swapped");
+        if (!from || !to) {
+            console.warn("Both fields are required to swap positions.");
+            return;
+        }
+        swapping.current = true;
+        const temp = from;
+        setFrom(to)
+        setTo(temp)
+        console.log("from =", from, "to =", to)
+    };
+
+    // useEffect(() => {
+    //     const response = async () => {
+    //         try {
+    //             if (!from || !to) {
+    //                 console.warn("Both fields are required to swap positions.");
+    //                 return;
+    //             }
+    //             const result = await Routing(from.cords, to.cords)
+    //             return result
+    //         } catch (error) {
+    //             console.error("Failed to fetch:", error);
+    //         }
+    //         const route = await response()
+    //         if (map.current?.getSource('route')) {
+    //             map.current?.setData({ data: route.geometry })
+    //         } else {
+
+    //             if (!map.current) return
+    //             map.current.addSource('route', {
+    //                 'type': 'geojson',
+    //                 'data': route.geometry
+    //             });
+    //             map.current.addLayer({
+    //                 'id': 'route',
+    //                 'type': 'line',
+    //                 'source': 'route',
+    //             });
+    //         }
+
+    //     }
+    // }, [from, to])
+    //
+    useEffect(() => {
+        const m = map.current;
+        if (!m || !styleReady) return;
+
+        const source = () => m.getSource('route') as GeoJSONSource | undefined;
+
+        if (!from || !to) {
+            // drop a stale line when either end is cleared
+            source()?.setData({ type: 'FeatureCollection', features: [] });
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchRoute = async () => {
+            try {
+                const result = await Routing(from.cords, to.cords);
+                if (cancelled) return;
+
+                const routeGeoJSON = {
+                    type: 'Feature' as const,
+                    properties: {},
+                    geometry: result.geometry,
+                };
+
+                const existing = source();
+                if (existing) {
+                    existing.setData(routeGeoJSON);
+                    return;
+                }
+
+                m.addSource('route', {
+                    type: 'geojson',
+                    data: routeGeoJSON,
+                })
+
+                m.addLayer({
+                    id: 'route',
+                    type: 'line',
+                    source: 'route',
+                    layout: {
+                        'line-join': 'round',
+                        'line-cap': 'round',
+                    },
+                    paint: {
+                        'line-color': '#2563eb',
+                        'line-width': 5,
+                    },
+                });
+            } catch (error) {
+                console.error('Failed to fetch route:', error);
+            }
+        };
+
+        fetchRoute();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [from, to, styleReady]);
+
 
     return (
         <>
@@ -136,12 +274,17 @@ export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
                 <div className="pointer-events-auto flex w-full max-w-md flex-col gap-2 rounded-xl border border-neutral-200 bg-white/95 p-3 shadow-xl backdrop-blur">
                     <SearchBox
                         placeholder="From"
+                        value={from?.name || ''}
                         near={me}
                         onSelect={pin(setFrom)}
                         onClear={() => setFrom(null)}
                     />
+
+                    <button type='button' onClick={handleSwap} className=' text-black w-1/4 h-1/2 mx-auto'>swap</button>
+
                     <SearchBox
                         placeholder="To"
+                        value={to?.name || ''}
                         near={me}
                         onSelect={pin(setTo)}
                         onClear={() => setTo(null)}

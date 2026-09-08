@@ -5,29 +5,38 @@ import { search, type Place } from '../api/geocode';
 type Props = {
     placeholder: string
     near?: [number, number] | null
+    value: string
     onSelect: (place: Place) => void
     onClear?: () => void
 }
 
-export function SearchBox({ placeholder, near, onSelect, onClear }: Props) {
-    const [q, setQ] = useState('');
+export function SearchBox({ placeholder, near, onSelect, value, onClear }: Props) {
+    const [q, setQ] = useState(value);
     const [results, setResults] = useState<Place[]>([]);
     const [open, setOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [active, setActive] = useState(-1);
 
     // picking a suggestion writes its name into the input; that edit must not re-search
-    const justPicked = useRef(false);
+    const skipNextSearch = useRef(false);
     // kept in a ref so a new position doesn't retrigger the search on every gps tick
     const nearRef = useRef(near);
     nearRef.current = near;
 
     useEffect(() => {
-        if (justPicked.current) {
-            justPicked.current = false;
+        if (q === value) return;
+
+        skipNextSearch.current = true;
+        setQ(value);
+        setOpen(false);
+        setResults([]);
+    }, [value]);
+
+    useEffect(() => {
+        if (skipNextSearch.current) {
+            skipNextSearch.current = false;
             return;
         }
-
         const term = q.trim();
         if (term.length < 2) {
             setResults([]);
@@ -59,10 +68,11 @@ export function SearchBox({ placeholder, near, onSelect, onClear }: Props) {
     }, [q]);
 
     function pick(place: Place) {
-        justPicked.current = true;
+        skipNextSearch.current = true;
         setQ(place.name);
         setOpen(false);
         setResults([]);
+
         onSelect(place);
     }
 
