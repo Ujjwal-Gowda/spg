@@ -1,17 +1,33 @@
+import type { LineString } from 'geojson';
 
-type LngLat = [number, number];
-export async function Routing(from: LngLat, to: LngLat) {
+export type LngLat = [number, number];
+
+export type Route = {
+    geometry: LineString;
+    distance: number;  //meteres
+    duration: number;   //seconds
+};
+
+const OSRM = 'https://router.project-osrm.org/route/v1/driving';
+
+export async function fetchRoute(from: LngLat, to: LngLat, signal?: AbortSignal): Promise<Route> {
     const coords = `${from[0]},${from[1]};${to[0]},${to[1]}`;
-    const result = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}` +
-        `?overview=full&geometries=geojson&steps=true`)
-    const data = await result.json()
+    const url = `${OSRM}/${coords}?overview=full&geometries=geojson`;
 
-    if (data.code != "Ok") { throw new Error(data.message ?? " no route found ") }
-    const r = data.routes[0]
+    const timeout = AbortSignal.timeout(15000);
+    const res = await fetch(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+
+    if (!res.ok) throw new Error(`Routing failed (${res.status})`);
+
+    const data = await res.json();
+    if (data.code !== 'Ok' || !data.routes?.length) {
+        throw new Error(data.message ?? 'No route between these places.');
+    }
+
+    const [route] = data.routes;
     return {
-        geometry: r.geometry,
-        distance: r.distance / 1000,
-        duration: r.duration / 60,
-        steps: r.legs[0].steps,
+        geometry: route.geometry,
+        distance: route.distance,
+        duration: route.duration,
     };
 }

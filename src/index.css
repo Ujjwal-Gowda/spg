@@ -3,7 +3,7 @@
 :root {
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   font: 16px/145% var(--sans);
-  color-scheme: light dark;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -15,4 +15,14 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+/* dvh keeps the map under a phone's collapsing address bar */
+#root {
+  height: 100dvh;
+}
+
+body {
+  /* panning the map must not pull-to-refresh the page */
+  overscroll-behavior: none;
 }

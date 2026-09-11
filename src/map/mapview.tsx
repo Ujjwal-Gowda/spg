@@ -1,296 +1,99 @@
-import { useEffect, useRef, useState } from 'react';
-import { Map, GeoJSONSource, NavigationControl, Marker, LngLatBounds, setWorkerUrl } from 'maplibre-gl';
-import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+import { useEffect, useRef } from 'react';
+import { Marker } from 'maplibre-gl';
+import type { Map, PaddingOptions } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { osmStyle } from './mapstyle';
-import { SearchBox } from '../ui/searchbox';
+import { useMapInstance } from './usemapinstance';
+import { boundsOf, drawRoute } from './routelayer';
 import type { Place } from '../api/geocode';
-import { Routing } from '../api/route';
+import type { LngLat, Route } from '../api/route';
 
-setWorkerUrl(maplibreWorkerUrl);
+type Props = {
+    me: LngLat | null
+    from: Place | null
+    to: Place | null
+    route: Route | null
+    onReady?: (map: Map) => void
+}
 
-const FALLBACK: [number, number] = [0, 0];
+const WIDE = 640;
 
-export function MapView({ onReady }: { onReady?: (m: Map) => void }) {
-    const [me, setMe] = useState<[number, number] | null>(null);
-    const [from, setFrom] = useState<Place | null>(null);
-    const [to, setTo] = useState<Place | null>(null);
-    const [styleReady, setStyleReady] = useState(false);
+/** Keeps framed geometry clear of the panel: docked left on desktop, along the bottom on a phone. */
+function framePadding(map: Map): PaddingOptions {
+    const { clientWidth, clientHeight } = map.getContainer();
+    const wide = clientWidth >= WIDE;
 
+    // room for the marker pins, which draw upward from the point they sit on
+    const padding = wide
+        ? { top: 64, right: 56, bottom: 56, left: 400 }
+        : { top: 88, right: 40, bottom: 248, left: 40 };
+
+    // a box larger than the canvas has no centre to fit to
+    const fits = padding.left + padding.right < clientWidth && padding.top + padding.bottom < clientHeight;
+    return fits ? padding : { top: 24, right: 24, bottom: 24, left: 24 };
+}
+
+export function MapView({ me, from, to, route, onReady }: Props) {
     const container = useRef<HTMLDivElement>(null);
-    const map = useRef<Map | null>(null);
+    const { map, ready } = useMapInstance(container, onReady);
+
     const meMarker = useRef<Marker | null>(null);
     const fromMarker = useRef<Marker | null>(null);
     const toMarker = useRef<Marker | null>(null);
-    const centered = useRef(false);
-    const follow = useRef(true);
-    const swapping = useRef(false);
+    const located = useRef(false);
 
-    useEffect(() => {
-        if (map.current || !container.current) return;
-
-        map.current = new Map({
-            container: container.current,
-            style: osmStyle,
-            center: FALLBACK,   // [lng, lat]
-            zoom: 2,
-            renderWorldCopies: false
-        });
-
-        map.current.addControl(new NavigationControl(), 'top-right');
-        map.current.on('load', () => {
-            setStyleReady(true);
-            onReady?.(map.current!);
-        });
-        map.current.on('error', (e) => console.error('map', e.error));
-
-        return () => {
-            map.current?.remove();
-            map.current = null;
-            meMarker.current = null;
-            fromMarker.current = null;
-            toMarker.current = null;
-            centered.current = false;
-        };
-    }, []);
-
-    // location retrieval
-    useEffect(() => {
-        const watchId = navigator.geolocation.watchPosition(
-            (pos) => {
-
-                const { latitude, longitude, accuracy } = pos.coords;
-
-
-                console.log({
-                    latitude,
-                    longitude,
-                    accuracy,
-                    accuracyKm: accuracy / 1000,
-                });
-                if (accuracy > 1000) {
-                    console.warn(`Ignoring inaccurate location: ${accuracy}m`);
-                    return;
-                }
-
-                setMe((prev) =>
-                    prev && prev[0] === longitude && prev[1] === latitude
-                        ? prev
-                        : [longitude, latitude]
-                );
-            },
-            (err) => console.warn('geo', err.message),
-            {
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 30000,
-            }
-        );
-
-        return () => {
-            navigator.geolocation.clearWatch(watchId);
-        };
-    }, []);
-
-    // marker code
-    useEffect(() => {
-        if (!map.current || !me) return;
-
-        if (!meMarker.current) {
-            meMarker.current = new Marker({ color: '#007AFF' })
-                .setLngLat(me)
-                .addTo(map.current);
-        } else {
-            meMarker.current.setLngLat(me);
-        }
-
-        if (!follow.current) return;
-
-        // snap on the first relocation and then smooth follow to save on tiles
-        if (centered.current) {
-            map.current.easeTo({ center: me });
-        } else {
-            centered.current = true;
-            map.current.jumpTo({ center: me, zoom: 13 });
-        }
-    }, [me]);
-
-    // the picked from / to places
+    // the user's own position: a dot that lands once, then only moves
     useEffect(() => {
         const m = map.current;
-        if (!m) return;
+        if (!ready || !m || !me) return;
 
-        for (const [place, ref, color] of [
-            [from, fromMarker, '#16a34a'],
+        if (meMarker.current) meMarker.current.setLngLat(me);
+        else meMarker.current = new Marker({ color: '#2563eb', scale: 0.7 }).setLngLat(me).addTo(m);
+
+        // centre on the first fix only — after that the map is the user's to move
+        if (!located.current) {
+            located.current = true;
+            if (!from && !to) m.jumpTo({ center: me, zoom: 13 });
+        }
+    }, [map, ready, me, from, to]);
+
+    // the picked endpoints
+    useEffect(() => {
+        const m = map.current;
+        if (!ready || !m) return;
+
+        for (const [place, marker, color] of [
+            [from, fromMarker, '#059669'],
             [to, toMarker, '#dc2626'],
         ] as const) {
             if (!place) {
-                ref.current?.remove();
-                ref.current = null;
-            } else if (ref.current) {
-                ref.current.setLngLat(place.cords);
+                marker.current?.remove();
+                marker.current = null;
+            } else if (marker.current) {
+                marker.current.setLngLat(place.cords);
             } else {
-                ref.current = new Marker({ color }).setLngLat(place.cords).addTo(m);
+                marker.current = new Marker({ color }).setLngLat(place.cords).addTo(m);
             }
         }
-        if (swapping.current) {
-            swapping.current = false;
-            return;
-        }
+    }, [map, ready, from, to]);
 
-        if (from && to) {
-            m.fitBounds(
-                new LngLatBounds().extend(from.cords).extend(to.cords),
-                { padding: 120 }
-            );
-        } else if (from || to) {
-            m.flyTo({
-                center: (from ?? to)!.cords,
-                zoom: 14
-            });
-        }
-    }, [from, to]);
-
-    function pin(setter: (p: Place | null) => void) {
-        return (place: Place) => {
-            follow.current = false;
-            setter(place);
-        };
-    }
-    const handleSwap = () => {
-        // alert("location swapped");
-        if (!from || !to) {
-            console.warn("Both fields are required to swap positions.");
-            return;
-        }
-        swapping.current = true;
-        const temp = from;
-        setFrom(to)
-        setTo(temp)
-        console.log("from =", from, "to =", to)
-    };
-
-    // useEffect(() => {
-    //     const response = async () => {
-    //         try {
-    //             if (!from || !to) {
-    //                 console.warn("Both fields are required to swap positions.");
-    //                 return;
-    //             }
-    //             const result = await Routing(from.cords, to.cords)
-    //             return result
-    //         } catch (error) {
-    //             console.error("Failed to fetch:", error);
-    //         }
-    //         const route = await response()
-    //         if (map.current?.getSource('route')) {
-    //             map.current?.setData({ data: route.geometry })
-    //         } else {
-
-    //             if (!map.current) return
-    //             map.current.addSource('route', {
-    //                 'type': 'geojson',
-    //                 'data': route.geometry
-    //             });
-    //             map.current.addLayer({
-    //                 'id': 'route',
-    //                 'type': 'line',
-    //                 'source': 'route',
-    //             });
-    //         }
-
-    //     }
-    // }, [from, to])
-    //
+    // the route owns the camera whenever there is one
     useEffect(() => {
         const m = map.current;
-        if (!m || !styleReady) return;
+        if (!ready || !m) return;
 
-        const source = () => m.getSource('route') as GeoJSONSource | undefined;
+        drawRoute(m, route?.geometry ?? null);
+        if (route) m.fitBounds(boundsOf(route.geometry.coordinates as LngLat[]), { padding: framePadding(m) });
+    }, [map, ready, route]);
 
-        if (!from || !to) {
-            // drop a stale line when either end is cleared
-            source()?.setData({ type: 'FeatureCollection', features: [] });
-            return;
-        }
+    // until then, frame whatever the user has picked so far
+    useEffect(() => {
+        const m = map.current;
+        if (!ready || !m || route) return;
 
-        let cancelled = false;
+        if (from && to) m.fitBounds(boundsOf([from.cords, to.cords]), { padding: framePadding(m) });
+        else if (from || to) m.flyTo({ center: (from ?? to)!.cords, zoom: 14 });
+    }, [map, ready, from, to, route]);
 
-        const fetchRoute = async () => {
-            try {
-                const result = await Routing(from.cords, to.cords);
-                if (cancelled) return;
-
-                const routeGeoJSON = {
-                    type: 'Feature' as const,
-                    properties: {},
-                    geometry: result.geometry,
-                };
-
-                const existing = source();
-                if (existing) {
-                    existing.setData(routeGeoJSON);
-                    return;
-                }
-
-                m.addSource('route', {
-                    type: 'geojson',
-                    data: routeGeoJSON,
-                })
-
-                m.addLayer({
-                    id: 'route',
-                    type: 'line',
-                    source: 'route',
-                    layout: {
-                        'line-join': 'round',
-                        'line-cap': 'round',
-                    },
-                    paint: {
-                        'line-color': '#2563eb',
-                        'line-width': 5,
-                    },
-                });
-            } catch (error) {
-                console.error('Failed to fetch route:', error);
-            }
-        };
-
-        fetchRoute();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [from, to, styleReady]);
-
-
-    return (
-        <>
-            {/* maplibre-gl.css forces position:relative on this div (it wins over
-                tailwind's layered utilities), so size it instead of absolute-inset it */}
-            <div ref={container} className="h-full w-full" />
-
-            <div className="pointer-events-none absolute inset-x-0 top-4 z-10 flex justify-center px-4">
-                <div className="pointer-events-auto flex w-full max-w-md flex-col gap-2 rounded-xl border border-neutral-200 bg-white/95 p-3 shadow-xl backdrop-blur">
-                    <SearchBox
-                        placeholder="From"
-                        value={from?.name || ''}
-                        near={me}
-                        onSelect={pin(setFrom)}
-                        onClear={() => setFrom(null)}
-                    />
-
-                    <button type='button' onClick={handleSwap} className=' text-black w-1/4 h-1/2 mx-auto'>swap</button>
-
-                    <SearchBox
-                        placeholder="To"
-                        value={to?.name || ''}
-                        near={me}
-                        onSelect={pin(setTo)}
-                        onClear={() => setTo(null)}
-                    />
-                </div>
-            </div>
-        </>
-    );
+    // maplibre-gl.css forces position:relative here, so size the div rather than inset it
+    return <div ref={container} className="h-full w-full" />;
 }
