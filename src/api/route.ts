@@ -15,7 +15,10 @@ export async function fetchRoute(from: LngLat, to: LngLat, signal?: AbortSignal)
     const url = `${OSRM}/${coords}?overview=full&geometries=geojson`;
 
     const timeout = AbortSignal.timeout(15000);
-    const res = await fetch(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+    const res = await fetch(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout }).catch((err) => {
+        if (err.name === 'AbortError') throw err;
+        throw new Error('Could not reach the routing service.');
+    });
 
     if (!res.ok) throw new Error(`Routing failed (${res.status})`);
 

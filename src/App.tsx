@@ -5,11 +5,12 @@ import { MapView } from './map/mapview';
 import { useGeolocation } from './map/usegeolocation';
 import { RoutePanel } from './ui/routepanel';
 import type { Field } from './ui/routepanel';
+import { PlaceCard } from './ui/placecard';
 import { CrosshairIcon } from './ui/icons';
 import { reverseGeocode } from './api/geocode';
 import type { Place } from './api/geocode';
 import { fetchRoute } from './api/route';
-import type { Route } from './api/route';
+import type { LngLat, Route } from './api/route';
 
 function App() {
     const map = useRef<Map | null>(null);
@@ -21,13 +22,28 @@ function App() {
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [request, setRequest] = useState<{ from: Place; to: Place } | null>(null);
+    const [picked, setPicked] = useState<LngLat | null>(null);
+    const [pickedPlace, setPickedPlace] = useState<Place | null>(null);
     const setters: Record<Field, Dispatch<SetStateAction<Place | null>>> = { from: setFrom, to: setTo };
 
     useEffect(() => {
-        setRequest(null);
+        // editing an endpoint invalidates the drawn route, but not a request just made for these two
+        setRequest((current) => (current?.from === from && current?.to === to ? current : null));
         setRoute(null);
         setError(null);
     }, [from, to]);
+
+    useEffect(() => {
+        if (!picked) return;
+
+        const ctrl = new AbortController();
+        setPickedPlace(null);
+        reverseGeocode(picked, ctrl.signal)
+            .then(setPickedPlace)
+            .catch(() => setPickedPlace(null));
+
+        return () => ctrl.abort();
+    }, [picked]);
 
     useEffect(() => {
         if (!request) return;
@@ -63,6 +79,18 @@ function App() {
         if (named) set((prev) => (prev === here ? named : prev));
     }
 
+    function directionsFromHere() {
+        if (!me || !picked) return;
+
+        const start: Place = { name: 'Your location', cords: me };
+        const end: Place = pickedPlace ?? { name: 'Dropped pin', cords: picked };
+
+        setFrom(start);
+        setTo(end);
+        setPicked(null);
+        setRequest({ from: start, to: end });
+    }
+
     function recenter() {
         if (!map.current || !me) return;
         map.current.easeTo({ center: me, zoom: Math.max(map.current.getZoom(), 15) });
@@ -74,14 +102,16 @@ function App() {
                 me={me}
                 from={from}
                 to={to}
+                picked={picked}
                 route={route}
+                onPick={setPicked}
                 onReady={(instance) => {
                     map.current = instance;
                 }}
             />
 
             <div
-                className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-end p-3 sm:justify-start"
+                className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-end gap-3 p-3 sm:justify-start"
                 style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
             >
                 <RoutePanel
@@ -104,6 +134,16 @@ function App() {
                         setTo(null);
                     }}
                 />
+
+                {picked && (
+                    <PlaceCard
+                        cords={picked}
+                        place={pickedPlace}
+                        canNavigate={Boolean(me)}
+                        onDirections={directionsFromHere}
+                        onClose={() => setPicked(null)}
+                    />
+                )}
 
                 <button
                     type="button"

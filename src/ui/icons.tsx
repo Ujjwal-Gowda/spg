@@ -27,3 +27,4 @@ export function CloseIcon({ className = '' }: IconProps) {
         </svg>
     );
 }
+
