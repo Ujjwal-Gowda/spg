@@ -1,4 +1,5 @@
 import type { LngLat } from './route';
+import { GEOCODER_URL } from '../config';
 
 export type Place = {
     name: string;
@@ -20,8 +21,6 @@ type PhotonFeature = {
     properties: Record<string, string | undefined>
     geometry: { coordinates: LngLat }
 }
-
-const PHOTON = 'https://photon.komoot.io';
 
 function join(parts: (string | undefined)[]): string {
     const out: string[] = [];
@@ -61,7 +60,7 @@ function signalFor(signal?: AbortSignal, ms = 8000) {
 }
 
 export async function search(q: string, near?: LngLat, signal?: AbortSignal): Promise<Place[]> {
-    const url = new URL(`${PHOTON}/api/`);
+    const url = new URL(`${GEOCODER_URL}/api/`);
     url.searchParams.set('q', q);
     url.searchParams.set('limit', '5');
 
@@ -78,7 +77,7 @@ export async function search(q: string, near?: LngLat, signal?: AbortSignal): Pr
 }
 
 export async function reverseGeocode(cords: LngLat, signal?: AbortSignal): Promise<Place | null> {
-    const url = new URL(`${PHOTON}/reverse/`);
+    const url = new URL(`${GEOCODER_URL}/reverse/`);
     url.searchParams.set('lon', String(cords[0]));
     url.searchParams.set('lat', String(cords[1]));
 

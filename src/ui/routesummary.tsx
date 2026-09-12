@@ -29,8 +29,28 @@ export function RouteSummary({ route }: { route: Route }) {
                 </dd>
             </dl>
 
+            {/* OSRM's usage policy requires the route source and the ODbL data
+                credit to be shown, not just the tile attribution. */}
             <p className="mt-1 text-[11px] leading-tight text-neutral-400">
-                Free-flow estimate — excludes traffic
+                Free-flow estimate — excludes traffic · Routing by{' '}
+                <a
+                    href="https://project-osrm.org/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2 hover:text-neutral-600"
+                >
+                    OSRM
+                </a>
+                , data ©{' '}
+                <a
+                    href="https://www.openstreetmap.org/copyright"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2 hover:text-neutral-600"
+                >
+                    OpenStreetMap
+                </a>{' '}
+                contributors (ODbL)
             </p>
         </div>
     );
