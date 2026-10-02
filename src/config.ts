@@ -1,20 +1,9 @@
-/**
- * Service endpoints.
- *
- * The public demo servers are fine for your own local use — OSM's tile policy
- * allows "normal interactive viewing by a human" — but they are NOT licensed for
- * an app you hand to other people, commercial or not. They are therefore inlined
- * only under `vite dev`; in a production build the ternary below is statically
- * false, so the URLs are dropped from the bundle entirely and a missing variable
- * throws. That makes shipping them by accident impossible rather than merely
- * discouraged.
- */
 const DEV_DEFAULTS = import.meta.env.DEV
     ? {
-          tile: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          routing: 'https://router.project-osrm.org/route/v1/driving',
-          geocoder: 'https://photon.komoot.io',
-      }
+        tile: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        routing: 'https://router.project-osrm.org/route/v1/driving',
+        geocoder: 'https://photon.komoot.io',
+    }
     : null;
 
 function endpoint(value: string | undefined, key: keyof NonNullable<typeof DEV_DEFAULTS>, name: string): string {
@@ -35,3 +24,4 @@ export const GEOCODER_URL = endpoint(import.meta.env.VITE_GEOCODER_URL, 'geocode
 export const TILE_ATTRIBUTION =
     import.meta.env.VITE_TILE_ATTRIBUTION ??
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+
